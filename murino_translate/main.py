@@ -2,17 +2,17 @@ from dotenv import load_dotenv
 import telebot, json, os, datetime, sys
 
 # Получаю папку, в котором лежит файл
-dir = os.path.dirname(os.path.abspath(__file__))
+cur_dir = os.path.dirname(os.path.abspath(__file__))
 
 #Пути к файлам
-exceptions_path = os.path.join(dir, "exceptions.json")
-config_path = os.path.join(dir, "config.env")
-prompts_path = os.path.join(dir, "prompts.txt")
+exceptions_path = os.path.join(cur_dir, "exceptions.json")
+config_path = os.path.join(cur_dir, "config.env")
+prompts_path = os.path.join(cur_dir, "prompts.txt")
 
 # Читаю токен
 load_dotenv(dotenv_path=config_path)
 token = os.getenv("TOKEN")
-admin = os.getenv("ADMIN")
+admin = os.getenv("ADMIN").split()
 
 # Получаем исключения
 with open(exceptions_path, "r", encoding="utf-8") as file:
@@ -20,15 +20,41 @@ with open(exceptions_path, "r", encoding="utf-8") as file:
 blacklist = data["blacklist"]
 
 
+class Logger:
+    @staticmethod
+    def log(case, *data):
+        # case = warning, info, error etc...
+
+        date_time = datetime.datetime.now()
+        date = date_time.strftime("%d.%m.%Y")
+        time = date_time.strftime("%H:%M:%S")
+
+        log_text = f"\n[{case}] [{date}/{time}]\n{'\n'.join(data)}\n"
+
+        with open(prompts_path, "a", encoding="utf-8") as file:
+            file.write(log_text)
+
+    @staticmethod
+    def clear():
+        with open(prompts_path, "w") as file:
+            file.write('')
+
+    @staticmethod
+    def get():
+        with open(prompts_path, "r", encoding="utf-8") as file:
+            text = file.read()
+            return text
+
+
 #Функция с чата гпт чтобы избегать случайной маркировки в MarkdownV2
 def escape_md(text: str) -> str:
     escape_chars = r"_*[]()~`>#+-=|{}.!\\"
     return ''.join(f'\\{c}' if c in escape_chars else c for c in text)
 
-
-
 # Правила муринского языка🛣
-def murinost(word, vowels, letters, exceptions):
+def murinost(word):
+    vowels, letters, exceptions = data["vowels"], data["letters"], data["exceptions"]
+
     if word in exceptions:
         return exceptions[word]
 
@@ -58,98 +84,72 @@ def murinost(word, vowels, letters, exceptions):
     #Если нихуя не подошло
     return word + "ость"
 
+def translate(text):
+    symbols = ",.-:;?!%\"'/\\1234567890"
 
-#Взаимодействия с юзером
-def main():
+    text = text.lower()
+    text = "".join([i if i not in symbols else "" for i in text])
+    text = text.split()
+
+    translated = " ".join(murinost(word) for word in text) 
+
+    return translated
+
+
+# Принятия ввода
+if __name__ == "__main__":
     bot = telebot.TeleBot(token)
 
     @bot.message_handler(commands=['start'])
     def start_message(message):
-        if (message.from_user.username not in blacklist):
-            bot.send_message(message.chat.id, "Охайо друн, этность муринский переводчик, пиши текст для переводость!")
-
-            #Записываю юзера
-            with open(prompts_path, "a", encoding="utf-8") as file:
-                file.write(f"\nПользователь @{message.from_user.username} запустил бота\n")
-        else:
+        if message.from_user.username in blacklist:
             bot.send_message(message.chat.id, "Тебя забанили🛑")
+
+        bot.send_message(message.chat.id, "Охайо друн, этность муринский переводчик, пиши текст для переводость!")
+
+        #Записываю юзера
+        Logger.log("info", f"Пользователь @{message.from_user.username} запустил бота")
 
     #Команда, которая выводит все заимодействия с пользователями
     @bot.message_handler(commands=['checklast'])
     def print_last(message):
         username = message.from_user.username
-        if (username not in blacklist and username == admin):
-            if (username == admin):
-                with open(prompts_path, "r", encoding="utf-8") as file:
-                    content = file.read()
-                if content != "":
-                    bot.send_message(message.chat.id, f"Вот последние взаимодействия:||\n{escape_md(content)}||", parse_mode="MarkdownV2")
-                else:
-                    bot.send_message(message.chat.id, "Список пуст💨")
-            else:
-                bot.send_message(message.chat.id, "Эта команда доступна только для админов🛑")
-        else:
-            bot.send_message(message.chat.id, "Тебя забанили🛑")
+
+        if username not in admin:
+            return
+
+        content = Logger.get()
+        if content:
+            bot.send_message(message.chat.id, f"Вот последние взаимодействия:||\n{escape_md(content)}||", parse_mode="MarkdownV2")
 
     # Команда, которая очищает облако
     @bot.message_handler(commands=['dellast', 'deletelast', 'dl'])
     def delete_last(message):
         username = message.from_user.username
-        if (username not in blacklist and username == admin):
-            if (username == admin):
-                with open(prompts_path, "w", encoding="utf-8") as file:
-                    file.write("")
-                    bot.send_message(message.chat.id, "Облако очищено💭")
-            else:
-                bot.send_message(message.chat.id, "Эта команда доступна только для админов🛑")
-        else:
-            bot.send_message(message.chat.id, "Тебя забанили🛑")
 
-    # Принятия ввода и работа с ним
+        if username not in admin:
+            return
+
+        Logger.clear()
+
+        bot.send_message(message.chat.id, "Облако очищено💭")
+
     @bot.message_handler(content_types=['text'])
-    def handle_message(message):
-        if (message.from_user.username not in blacklist):
-            user_input = message.text.lower()
-
-            #Очистка от лишних символов(в муринском языке не приветствеум их)
-            symbols = [',', '.', '-', ':', ';', '?', '!', '%', '"', '/'
-                       '1', '2', '3', '4', '5', '6', '7', '8', '9', '0']
-
-            words = user_input.split()
-            output = ""
-
-            for word in words:
-                for _ in word:
-                    if _ in symbols:
-                        new_word = word.replace(_, "")
-                        if word in words:
-                            index = words.index(word)
-                            words[index] = new_word
-
-            #Собираю результат
-            for word in words:
-                output = output + murinost(word, data["vowels"], data["letters"], data["exceptions"]) + " "
-
-            bot.send_message(message.chat.id, output)
-
-            #Записать запрос юзера и инфо про него
-            with open(prompts_path, "a", encoding="utf-8") as file:
-                date_time = datetime.datetime.fromtimestamp(message.date)
-                date = date_time.strftime("%d.%m.%Y")
-                time = date_time.strftime("%H:%M:%S")
-                file.write(
-                    f"\nНик: @{message.from_user.username}\n"
-                    f"Дата: {date}\n"
-                    f"Время: {time}\n"
-                    f"Написал: {message.text}\n"
-                    f"Ответ: {output}\n"
-                )
-        else:
+    def translate_handler(message):
+        if message.from_user.username in blacklist:
             bot.send_message(message.chat.id, "Тебя забанили🛑")
+            return
 
-
+        text = translate(message.text)
+        bot.send_message(message.chat.id, text)
+        
+        #Записать запрос юзера и инфо про него
+        Logger.log(
+                "info",
+                f"Ник: @{message.from_user.username}",
+                f"Текст: {message.text}",
+                f"Ответ: {text}"
+        )
+       
     bot.infinity_polling(skip_pending=True)
 
-
-if __name__ == "__main__":
-    main()
